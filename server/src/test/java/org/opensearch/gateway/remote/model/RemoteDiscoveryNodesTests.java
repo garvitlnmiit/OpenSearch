@@ -33,6 +33,7 @@ import java.io.InputStream;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
@@ -159,7 +160,8 @@ public class RemoteDiscoveryNodesTests extends OpenSearchTestCase {
     }
 
     public void testSerializationOnOldVersionDeserializationOnNewVersions() throws IOException {
-        DiscoveryNodes nodes = getDiscoveryNodes();
+        // Nodes need at least two attributes for the 3.4.0 read below to fail deterministically, see comment there
+        DiscoveryNodes nodes = getDiscoveryNodes(Map.of("zone", "zone_a", "rack", "rack_a"));
 
         // Create format with V_3_1_0 for serialization using the same ChecksumWritableBlobStoreFormat
         // which is being used in RemoteDiscoveryNodes class.
@@ -174,9 +176,12 @@ public class RemoteDiscoveryNodesTests extends OpenSearchTestCase {
             discoveryNode.writeToWithAttribute(out);
         }, nodes, "test-blob", compressor).streamInput().readAllBytes();
 
-        // Deserialize assuming serialization was performed using version 3.4.0, which should fail
+        // Deserialize assuming serialization was performed using version 3.4.0, which should fail. Since 3.2.0 the reader
+        // expects an optional stream address flag that 3.1.0 did not write, so it reads the attribute count as a boolean.
+        // With empty attributes that byte is a valid "false" and, for some role combinations, the rest of the stream is
+        // misread without any exception. An attribute count of two or more is never a valid boolean, so the read fails.
         RemoteDiscoveryNodes deserialize34 = new RemoteDiscoveryNodes("test-blob", clusterUUID, compressor, Version.V_3_4_0);
-        assertThrows(Exception.class, () -> {
+        assertThrows(IllegalStateException.class, () -> {
             try (InputStream inputStream = new ByteArrayInputStream(serializedData)) {
                 deserialize34.deserialize(inputStream);
             }
@@ -193,13 +198,17 @@ public class RemoteDiscoveryNodesTests extends OpenSearchTestCase {
     }
 
     public static DiscoveryNodes getDiscoveryNodes() {
+        return getDiscoveryNodes(Collections.emptyMap());
+    }
+
+    private static DiscoveryNodes getDiscoveryNodes(Map<String, String> attributes) {
         return DiscoveryNodes.builder()
             .add(
                 new DiscoveryNode(
                     "name_" + 1,
                     "node_" + 1,
                     buildNewFakeTransportAddress(),
-                    Collections.emptyMap(),
+                    attributes,
                     new HashSet<>(randomSubsetOf(DiscoveryNodeRole.BUILT_IN_ROLES)),
                     Version.CURRENT
                 )
@@ -209,7 +218,7 @@ public class RemoteDiscoveryNodesTests extends OpenSearchTestCase {
                     "name_" + 2,
                     "node_" + 2,
                     buildNewFakeTransportAddress(),
-                    Collections.emptyMap(),
+                    attributes,
                     new HashSet<>(randomSubsetOf(DiscoveryNodeRole.BUILT_IN_ROLES)),
                     Version.CURRENT
                 )
@@ -219,7 +228,7 @@ public class RemoteDiscoveryNodesTests extends OpenSearchTestCase {
                     "name_" + 3,
                     "node_" + 3,
                     buildNewFakeTransportAddress(),
-                    Collections.emptyMap(),
+                    attributes,
                     new HashSet<>(randomSubsetOf(DiscoveryNodeRole.BUILT_IN_ROLES)),
                     Version.CURRENT
                 )
